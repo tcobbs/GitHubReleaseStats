@@ -5,6 +5,11 @@
 //  Created by Travis Cobbs on 6/5/21.
 //
 
+// GitHub REST API Documentation:
+// https://docs.github.com/en/rest
+// Repositories:
+// https://docs.github.com/en/rest/reference/repos
+
 import Foundation
 
 class DictArrayDecoder<T: Decodable> {
@@ -47,6 +52,7 @@ struct Release: Codable, Identifiable {
 	let publishedAt: String
 	var assets: [Asset]
 	let prerelease: Bool
+	let tagName: String
 
 	enum CodingKeys: String, CodingKey {
 		case id
@@ -54,6 +60,7 @@ struct Release: Codable, Identifiable {
 		case publishedAt = "published_at"
 		case assets
 		case prerelease
+		case tagName = "tag_name"
 	}
 
 	var publishedAtDate: Date? {
@@ -69,39 +76,24 @@ class GitHubAPI {
 	let apiRoot = "https://api.github.com/"
 	var values: [UUID: [[String: Any]]] = [:]
 
-	// Example URL:	
+	// Example URL:
 	// https://api.github.com/repos/tcobbs/ldview/releases
-	func getReleases(user: String, project: String, completion: @escaping (([Release]?, Error?) -> Void)) {
-		download(url: URL(string: apiRoot + "repos/\(user)/\(project)/releases")) { data, error in
-			if error != nil {
-				completion(nil, error)
-			} else if let data = data {
-			    if let releases: [Release] = try? DictArrayDecoder.decode(data) {
-					completion(releases, nil)
-				} else {
-					completion(nil, "Could not parse release data")
-				}
-			} else {
-				completion(nil, nil)
-			}
+	func getReleases(user: String, project: String) async throws -> [Release] {
+		let data = try await download(url: URL(string: apiRoot + "repos/\(user)/\(project)/releases"))
+		if let releases: [Release] = try? DictArrayDecoder.decode(data) {
+			return releases
+		} else {
+			throw "Could not parse release data"
 		}
 	}
-	
-	func download(url: URL?, completion: @escaping ((Data?, Error?) -> Void)) {
+
+	func download(url: URL?) async throws -> Data {
 		guard let url = url else {
-			completion(nil, "URL Failure")
-			return
+			throw "URL Failure"
 		}
 		let uuid = UUID()
 		values[uuid] = []
-		downloadPage(uuid: uuid, url: url) { data, error, nextPageURL in
-			if let data = data, let nextPageURL = nextPageURL {
-				self.addValues(uuid: uuid, data: data)
-				self.downloadPages(uuid: uuid, url: nextPageURL, completion: completion)
-			} else {
-				completion(data, error)
-			}
-		}
+		return try await downloadPages(uuid: uuid, url: url)
 	}
 
 	func addValues(uuid: UUID, data: Data) {
@@ -110,57 +102,45 @@ class GitHubAPI {
 		}
 	}
 
-	func downloadPage(uuid: UUID, url: URL, completion: @escaping((Data?, Error?, URL?) -> Void)) {
-		let session = URLSession(configuration: URLSessionConfiguration.default)
+	func downloadPage(uuid: UUID, url: URL) async throws -> (Data, URL?) {
 		var request = URLRequest(url: url)
 		request.httpMethod = "GET"
 		request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
-		let task = session.dataTask(with: request) { (data, response, error) in
-			if error == nil {
-				if let response = response as? HTTPURLResponse
-				{
-					if response.statusCode == 200
-					{
-						if let linkHeader = response.value(forHTTPHeaderField: "Link") {
-							let links = linkHeader.components(separatedBy: ",")
-							for link in links {
-								if link.hasSuffix("rel=\"next\"") {
-									if let data = data, let start = link.firstIndex(of: "<"), let end = link.lastIndex(of: ">") {
-										if let nextPageURL = URL(string: String(link[link.index(after: start)..<end])) {
-											completion(data, nil, nextPageURL)
-											return
-										}
-									}
+		let (data, response) = try await URLSession.shared.data(for: request)
+		if let response = response as? HTTPURLResponse
+		{
+			if response.statusCode == 200
+			{
+				if let linkHeader = response.value(forHTTPHeaderField: "link") {
+					let links = linkHeader.components(separatedBy: ",")
+					for link in links {
+						if link.hasSuffix("rel=\"next\"") {
+							if let start = link.firstIndex(of: "<"), let end = link.lastIndex(of: ">") {
+								if let nextPageURL = URL(string: String(link[link.index(after: start)..<end])) {
+									return (data, nextPageURL)
 								}
 							}
 						}
-						completion(data, nil, nil)
-					} else {
-						completion(nil, "Status code: \(response.statusCode)", nil)
 					}
-				} else {
-					completion(nil, "Invalid response.", nil)
 				}
+				return (data, nil)
 			} else {
-				completion(nil, error, nil)
+				throw "Status code: \(response.statusCode)"
 			}
+		} else {
+			throw "Invalid response."
 		}
-		task.resume()
 	}
-	
-	func downloadPages(uuid: UUID, url: URL, completion: @escaping ((Data?, Error?) -> Void)) {
-		downloadPage(uuid: uuid, url: url) { data, error, nextPageURL in
-			if let data = data {
-				self.addValues(uuid: uuid, data: data)
-			}
-			if let nextPageURL = nextPageURL {
-				self.downloadPages(uuid: uuid, url: nextPageURL, completion: completion)
-			} else {
-				if let jsonData = try? JSONSerialization.data(withJSONObject: self.values[uuid]!, options: []) {
-					self.values.removeValue(forKey: uuid)
-					completion(jsonData, nil)
-				}
-			}
+
+	func downloadPages(uuid: UUID, url: URL) async throws -> Data {
+		let (data, nextPageURL) = try await downloadPage(uuid: uuid, url: url)
+		addValues(uuid: uuid, data: data)
+		if let nextPageURL = nextPageURL {
+			return try await downloadPages(uuid: uuid, url: nextPageURL)
+		} else {
+			let jsonData = try JSONSerialization.data(withJSONObject: values[uuid]!, options: [])
+			values.removeValue(forKey: uuid)
+			return jsonData
 		}
 	}
 }

@@ -82,8 +82,9 @@ struct ReleaseView: View {
 				VStack(alignment: .leading) {
 					if let publishedAtDate = release.publishedAtDate {
 						Text("Published: \(localFormatter.string(from: publishedAtDate))")
-							.padding(.bottom, 4.0)
 					}
+					Text("Tag: \(release.tagName)")
+						.padding(.bottom, 4.0)
 					ForEach(release.assets) { asset in
 						if asset.downloadCount > 0 {
 							HStack {
@@ -135,7 +136,8 @@ struct ReleaseView_Previews: PreviewProvider {
 				Asset(id: 13, name: "Preview Asset 1", downloadCount: 13),
 				Asset(id: 14, name: "Preview Asset 2", downloadCount: 22),
 				Asset(id: 15, name: "Preview Asset 3", downloadCount: 7)],
-				prerelease: true),
+				prerelease: true,
+				tagName: "Preview tag"),
 			isExpanded: .constant(true))
     }
 }

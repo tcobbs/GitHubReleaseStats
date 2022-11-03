@@ -103,22 +103,16 @@ struct ContentView: View {
 			ContentView.defaults.set(user, forKey: "user")
 			ContentView.defaults.set(project, forKey: "project")
 			let gitHubAPI = GitHubAPI()
-			gitHubAPI.getReleases(user: user, project: project) { releases, error in
-				self.error = nil
-				if let releases = releases {
+			Task {
+				do {
+					let releases = try await gitHubAPI.getReleases(user: user, project: project)
 					self.releases = releases
 					fetched = true
 					processReleases()
-				} else {
-					self.releases = []
-					if let error = error {
-						self.error = error
-						fetched = false
-						print("Error fetching release data: \(error)")
-					} else {
-						fetched = true
-						print("No release data")
-					}
+				} catch {
+					self.error = error
+					fetched = false
+					print("Error fetching release data: \(error)")
 				}
 			}
 		}
